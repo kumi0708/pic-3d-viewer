@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PIC 3D Viewer</title>
+<style>
+  :root {
+    --bg: #0b0d12; --panel: rgba(18,21,28,.88); --line: #2a2f3b;
+    --text: #d9dde6; --dim: #8a93a6; --accent: #ff8a3d; --accent2: #49d6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; overflow: hidden; }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #panel { position: fixed; top: 12px; left: 12px; width: 300px; max-height: calc(100% - 24px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; backdrop-filter: blur(6px); }
+  h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .04em; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--dim); font-size: 11px; margin-bottom: 10px; }
+  h2 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; margin: 14px 0 6px; font-weight: 600; }
+  .btns { display: flex; flex-wrap: wrap; gap: 4px; }
+  button, .filebtn { background: #1c212c; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 9px; font: inherit; cursor: pointer; }
+  button:hover, .filebtn:hover { border-color: #4a5266; }
+  button.on { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  .row label { width: 82px; color: var(--dim); flex: none; }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .row .v { width: 48px; text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+  #thumb { width: 100%; image-rendering: pixelated; border: 1px solid var(--line); border-radius: 4px; display: block; margin-top: 6px; }
+  #info { font-size: 12px; }
+  #info table { width: 100%; border-collapse: collapse; }
+  #info td { padding: 1px 0; }
+  #info td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  #info td:first-child { color: var(--dim); }
+  #comment { color: var(--accent2); word-break: break-all; margin: 4px 0; }
+  #desc { color: var(--dim); font-size: 12px; margin-top: 6px; min-height: 3em; }
+  #drop { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; font-size: 22px;
+    background: rgba(255,138,61,.15); border: 3px dashed var(--accent); pointer-events: none; }
+  #drop.show { display: flex; }
+  #err { color: #ff6b6b; font-size: 12px; }
+  .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 8px; vertical-align: -1px; }
+  .legend { font-size: 11px; color: var(--dim); }
+  input[type=file] { display: none; }
+  select, input[type=text] { flex: 1; min-width: 0; background: #1c212c; color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 6px; font: inherit; }
+  button:disabled { opacity: .4; cursor: default; }
+  #encInfo { margin: 6px 0 0; color: var(--accent2); }
+  #toggle { position: fixed; top: 12px; right: 12px; }
+  @media (max-width: 600px) { #panel { width: calc(100% - 24px); max-height: 46%; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="drop">PIC または画像ファイルをドロップ</div>
+<button id="toggle">パネル</button>
+<div id="panel">
+  <h1><span>PIC</span> 3D Viewer</h1>
+  <div class="sub">X68000 柳沢PIC形式 × three.js</div>
+
+  <div class="btns">
+    <label class="filebtn">PICを開く…<input type="file" id="file" accept=".pic,.PIC"></label>
+    <button id="loadSample">サンプル</button>
+  </div>
+  <div id="err"></div>
+
+  <h2>画像 → PIC 変換</h2>
+  <div class="btns">
+    <label class="filebtn">画像を選ぶ…<input type="file" id="imgFile" accept="image/*"></label>
+    <button id="reconvert" disabled>再変換</button>
+    <button id="download" disabled>PIC を保存</button>
+  </div>
+  <div class="row"><label>サイズ</label><select id="optSize">
+    <option value="0">元のまま (最大1024)</option>
+    <option value="768">長辺 768</option>
+    <option value="512" selected>長辺 512</option>
+    <option value="256">長辺 256</option>
+    <option value="128">長辺 128</option>
+  </select></div>
+  <div class="row"><label>色深度</label><select id="optBits">
+    <option value="5" selected>15bit (各5bit・32768色)</option>
+    <option value="4">12bit (各4bit)</option>
+    <option value="3">9bit (各3bit)</option>
+    <option value="2">6bit (各2bit)</option>
+    <option value="1">3bit (8色)</option>
+  </select></div>
+  <div class="row"><label>ディザ</label><select id="optDither">
+    <option value="none" selected>なし</option>
+    <option value="bayer">ベイヤー (網点)</option>
+    <option value="fs">誤差拡散</option>
+  </select></div>
+  <div class="row"><label>コメント</label><input type="text" id="optComment" placeholder="英数字のみ" maxlength="60"></div>
+  <div id="encInfo" class="sub"></div>
+
+  <canvas id="thumb"></canvas>
+  <div id="comment"></div>
+  <div id="info"></div>
+
+  <h2>3D 表現</h2>
+  <div class="btns" id="modes"></div>
+  <div id="desc"></div>
+
+  <h2>色づけ</h2>
+  <div class="btns" id="colorModes"></div>
+  <div class="legend" id="legend"></div>
+
+  <h2>デコード再生（稲妻）</h2>
+  <div class="btns">
+    <button id="play">▶ 再生</button>
+    <button id="restart">⟲ 最初から</button>
+    <button id="full">全表示</button>
+  </div>
+  <div class="row"><label>読込位置</label><input type="range" id="prog" min="0" max="1000" value="1000"><span class="v" id="progV"></span></div>
+  <div class="row"><label>再生時間</label><input type="range" id="speed" min="1" max="60" value="12"><span class="v" id="speedV"></span></div>
+
+  <h2>表示</h2>
+  <div class="row"><label>高さ</label><input type="range" id="height" min="0" max="60" value="20"><span class="v" id="heightV"></span></div>
+  <div class="row"><label>点サイズ</label><input type="range" id="psize" min="2" max="30" value="11"><span class="v" id="psizeV"></span></div>
+  <div class="btns">
+    <button id="chains" class="on">連鎖ライン</button>
+    <button id="rotate">自動回転</button>
+    <button id="resetCam">視点リセット</button>
+  </div>
+  <div class="sub" style="margin-top:10px">ドラッグ: 回転 / 右ドラッグ: 移動 / ホイール: ズーム<br>PIC はそのまま表示、PNG/JPEG などの画像は PIC に変換して表示します（ウィンドウへのドロップも可）。</div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const SAMPLE_B64 = "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";
+
+// ---------------------------------------------------------------
+// PIC デコーダ (picl.c / PicLoader2022 の移植 + 3D 用の計測)
+// ---------------------------------------------------------------
+function decodePIC(arrayBuffer) {
+  const u8 = new Uint8Array(arrayBuffer);
+  let pos = 0, buf = 0, nbits = 0;
+  const read = (n) => {
+    while (n > nbits) {
+      if (pos >= u8.length) throw new Error('予期しないファイル終端です');
+      buf = buf * 256 + u8[pos++]; nbits += 8;
+    }
+    const sh = Math.pow(2, nbits - n);
+    const v = Math.floor(buf / sh);
+    buf -= v * sh; nbits -= n;
+    return v;
+  };
+  const bitPos = () => pos * 8 - nbits;
+
+  // ---- ヘッダ
+  if (read(8) !== 0x50 || read(8) !== 0x49 || read(8) !== 0x43) throw new Error('PIC ではありません');
+  const cbytes = [];
+  let ch;
+  while ((ch = read(8)) !== 0x1a) cbytes.push(ch);
+  while (read(8) !== 0) {}
+  if (read(8) !== 0) throw new Error('PIC ではありません');
+  if (read(8) !== 0) throw new Error('タイプ/モード 0 のみ対応');
+  if (read(16) !== 15) throw new Error('15bit 色のみ対応');
+  const W = read(16), H = read(16);
+  if (!W || !H || W > 4096 || H > 4096) throw new Error(`サイズが不正です (${W}x${H})`);
+  let comment = '';
+  try { comment = new TextDecoder('shift_jis').decode(new Uint8Array(cbytes)); }
+  catch { comment = String.fromCharCode(...cbytes); }
+
+  // ---- 色キャッシュ (128色 LRU)
+  const ctColor = new Uint16Array(128), next = new Int32Array(128), prev = new Int32Array(128);
+  for (let i = 0; i < 128; i++) { prev[i] = (i + 1) % 128; next[i] = (i - 1 + 128) % 128; }
+  let colorP = 0, cacheHit = 0, cacheMiss = 0;
+  const readColor = () => {
+    if (read(1) === 0) {
+      const c = read(15);
+      colorP = prev[colorP]; ctColor[colorP] = c; cacheMiss++;
+      return (c << 1) & 0xffff;
+    }
+    const idx = read(7); cacheHit++;
+    if (colorP !== idx) {
+      next[prev[idx]] = next[idx]; prev[next[idx]] = prev[idx];
+      next[prev[colorP]] = idx; prev[idx] = prev[colorP];
+      prev[colorP] = idx; next[idx] = colorP; colorP = idx;
+    }
+    return (ctColor[idx] << 1) & 0xffff;
+  };
+  const readLength = () => {
+    let a = 1;
+    while (read(1) !== 0) a++;
+    return read(a) + Math.pow(2, a) - 1;
+  };
+
+  // ---- 計測用バッファ
+  const N = W * H;
+  const gv = new Uint16Array(N);       // GVRAM 相当
+  const kind = new Uint8Array(N);      // 0=ラン 1=変化点 2=連鎖
+  const tDec = new Float32Array(N);    // 色が確定したビット位置
+  const lead = new Float32Array(N);    // 連鎖で先に確定した量(ビット)
+  const segs = [];                     // 連鎖ライン [x0,y0,x1,y1,t1,color,...]
+  let nChange = 0, nChain = 0, nChainPix = 0;
+
+  const expandChain = (x, y, c) => {
+    nChain++;
+    for (;;) {
+      const px = x, py = y;
+      switch (read(2)) {
+        case 0:
+          if (read(1) === 0) return;
+          if (read(1) === 0) x -= 2; else x += 2;
+          break;
+        case 1: x--; break;
+        case 2: break;
+        case 3: x++; break;
+      }
+      y++;
+      if (x >= 0 && x < W && y < H) {
+        const i = y * W + x;
+        gv[i] = c | 1; kind[i] = 2; tDec[i] = bitPos(); nChainPix++;
+        if (px >= 0 && px < W) segs.push(px, py, x, y, tDec[i], c);
+      }
+    }
+  };
+
+  let x = -1, y = 0, c = 0;
+  outer: for (;;) {
+    let len = readLength();
+    const t = bitPos();
+    while (--len !== 0) {
+      if (++x === W) { if (++y === H) break outer; x = 0; }
+      const i = y * W + x;
+      const a = gv[i];
+      if (a !== 0) { c = a & 0xfffe; lead[i] = t - tDec[i]; }
+      else { tDec[i] = t; kind[i] = 0; }
+      gv[i] = c;
+    }
+    if (++x === W) { if (++y === H) break; x = 0; }
+    c = readColor();
+    const i = y * W + x;
+    gv[i] = c; kind[i] = 1; tDec[i] = bitPos(); lead[i] = 0; nChange++;
+    if (read(1) !== 0) expandChain(x, y, c);
+  }
+
+  // 未到達ピクセル(壊れたファイル対策)
+  const total = bitPos();
+  const colors = new Set();
+  for (let i = 0; i < N; i++) { gv[i] &= 0xfffe; colors.add(gv[i]); }
+  return { W, H, comment, gv, kind, tDec, lead, segs, total, fileSize: u8.length,
+    stats: { nChange, nChain, nChainPix, cacheHit, cacheMiss, colors: colors.size } };
+}
+
+// ---------------------------------------------------------------
+// PIC エンコーダ (PicLoader2022 の PicEncoder を移植・修正)
+//   gv: Uint16Array (X68000 16bit 色, bit0 = 0)
+// ---------------------------------------------------------------
+function encodePIC(gv, W, H, comment = '') {
+  const out = [];
+  let acc = 0, nb = 0;
+  const prof = { header: 0, color: 0, length: 0, chain: 0 };
+  const write = (data, bits, key) => {
+    prof[key] += bits;
+    for (let i = bits - 1; i >= 0; i--) {
+      acc = (acc << 1) | (Math.floor(data / Math.pow(2, i)) & 1);
+      if (++nb === 8) { out.push(acc); acc = 0; nb = 0; }
+    }
+  };
+
+  // ヘッダ
+  const cm = [...comment].map((ch) => ch.charCodeAt(0)).filter((v) => v >= 0x20 && v < 0x7f);
+  for (const b of [0x50, 0x49, 0x43, ...cm, 0x1a, 0, 0, 0]) write(b, 8, 'header');
+  write(15, 16, 'header'); write(W, 16, 'header'); write(H, 16, 'header');
+
+  // 色キャッシュ (デコーダと同じ LRU を同期して動かす)
+  const ct = new Uint16Array(128), next = new Int32Array(128), prev = new Int32Array(128);
+  const rev = new Int32Array(32768); // 色 → スロット+1 (0 = 未登録)
+  for (let i = 0; i < 128; i++) { prev[i] = (i + 1) % 128; next[i] = (i - 1 + 128) % 128; }
+  let colorP = 0;
+  const writeColor = (c16) => {
+    const c = (c16 >> 1) & 0x7fff;
+    const idx = rev[c] - 1;
+    if (idx >= 0) {
+      write(1, 1, 'color'); write(idx, 7, 'color');
+      if (colorP !== idx) {
+        next[prev[idx]] = next[idx]; prev[next[idx]] = prev[idx];
+        next[prev[colorP]] = idx; prev[idx] = prev[colorP];
+        prev[colorP] = idx; next[idx] = colorP; colorP = idx;
+      }
+    } else {
+      colorP = prev[colorP];
+      if (rev[ct[colorP]] === colorP + 1) rev[ct[colorP]] = 0;
+      ct[colorP] = c; rev[c] = colorP + 1;
+      write(0, 1, 'color'); write(c, 15, 'color');
+    }
+  };
+  // 長さ L: (a-1)個の1 + 0 + (L-(2^a-1)) を a ビット
+  const writeLength = (L) => {
+    let a = 1;
+    while (L >= Math.pow(2, a + 1) - 1) a++;
+    for (let i = 1; i < a; i++) write(1, 1, 'length');
+    write(0, 1, 'length');
+    write(L - (Math.pow(2, a) - 1), a, 'length');
+  };
+
+  const P = (x, y) => (x >= 0 && x < W && y >= 0 && y < H) ? gv[y * W + x] : -1;
+  const ignore = new Uint8Array(W * H);
+  // 連鎖の探索と出力
+  const writeChain = (x, y, color) => {
+    let first = true;
+    for (y++; y < H; y++) {
+      // 対象ドットのラスタ順で左隣が同色なら、ランで色が伝わるので連鎖不要
+      const leftSame = (tx) => tx > 0 ? P(tx - 1, y) === color : P(W - 1, y - 1) === color;
+      let d;
+      if (P(x - 2, y) === color) d = -2;
+      else if (P(x - 1, y) === color) d = -1;
+      else if (P(x, y) === color) d = 0;
+      else if (P(x + 1, y) === color) d = 1;
+      else if (P(x + 2, y) === color) d = 2;
+      else break;
+      if (leftSame(x + d)) break;
+      if (first) { first = false; write(1, 1, 'chain'); }
+      if (d === -2) write(2, 4, 'chain');
+      else if (d === -1) write(1, 2, 'chain');
+      else if (d === 0) write(2, 2, 'chain');
+      else if (d === 1) write(3, 2, 'chain');
+      else write(3, 4, 'chain');
+      x += d;
+      ignore[y * W + x] = 1;
+    }
+    if (!first) write(0, 3, 'chain'); else write(0, 1, 'chain');
+  };
+
+  const N = W * H;
+  let i = 0, color = 0;
+  while (i < N && gv[i] === 0) i++;
+  writeLength(i + 1);
+  while (i < N) {
+    color = gv[i];
+    writeColor(color);
+    writeChain(i % W, (i / W) | 0, color);
+    let len = 0;
+    while (i < N && (ignore[i] || gv[i] === color)) {
+      if (ignore[i]) color = gv[i];
+      len++; i++;
+    }
+    writeLength(len);
+  }
+  if (nb) write(0, 8 - nb, 'header');
+  return { bytes: new Uint8Array(out), prof };
+}
+
+// 画像 → X68000 15bit 色 (減色・ディザ)
+function quantize(rgba, W, H, bits, dither) {
+  const lv = (1 << bits) - 1;
+  const gv = new Uint16Array(W * H);
+  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  const err = dither === 'fs' ? new Float32Array(W * H * 3) : null;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    const a = rgba[i*4+3] / 255;
+    const q = [0, 0, 0];
+    for (let k = 0; k < 3; k++) {
+      let v = rgba[i*4+k] * a / 255 * lv;
+      if (err) v += err[i*3+k];
+      else if (dither === 'bayer') v += (BAYER[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5;
+      const qq = Math.max(0, Math.min(lv, Math.round(v)));
+      if (err) {
+        const e = v - qq;
+        if (x + 1 < W) err[(i+1)*3+k] += e * 7/16;
+        if (y + 1 < H) {
+          if (x > 0) err[(i+W-1)*3+k] += e * 3/16;
+          err[(i+W)*3+k] += e * 5/16;
+          if (x + 1 < W) err[(i+W+1)*3+k] += e * 1/16;
+        }
+      }
+      q[k] = Math.round(qq * 31 / lv);
+    }
+    gv[i] = (q[1] << 11) | (q[0] << 6) | (q[2] << 1);
+  }
+  return gv;
+}
+
+// X68000 の 16bit 色: GGGGG RRRRR BBBBB I
+const c16ToRGB = (c) => [((c >> 6) & 31) / 31, ((c >> 11) & 31) / 31, ((c >> 1) & 31) / 31];
+
+// ---------------------------------------------------------------
+// three.js
+// ---------------------------------------------------------------
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0d12);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 500);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+const grid = new THREE.GridHelper(14, 28, 0x2a3040, 0x161a22);
+grid.rotation.x = Math.PI / 2; grid.position.z = -0.02;
+scene.add(grid);
+
+const MODES = [
+  { name: '平面', desc: '元の画像そのまま。X68000 の 15bit 色 (GRB 各5bit)。' },
+  { name: '輝度ハイト', desc: '明るさを高さに。ドットを柱のように立ち上げた地形として見ます。' },
+  { name: '圧縮構造', desc: '変化点（新しい色を読んだ点）を最も高く、連鎖（縦に伝播した点）を中段に、ランで埋まった点を床に置きます。PIC がどこに情報を使っているかが分かります。' },
+  { name: '稲妻', desc: '連鎖によって「先回りして」色が確定したドットを、どれだけ先に確定したか（ビット数）の分だけ持ち上げます。下へ伸びる連鎖が稲妻の斜面になります。' },
+  { name: '色空間', desc: '各ドットを RGB 立方体の中に配置。X=R, Y=G, Z=B。5bit 階調の格子状の分布が見えます。' },
+];
+const COLOR_MODES = [
+  { name: '実色' },
+  { name: '種別', legend: '<span style="background:#555"></span>ラン<span style="background:#ff8a3d"></span>変化点<span style="background:#49d6ff"></span>連鎖' },
+  { name: '時刻', legend: '色相 = ファイル内の読込位置（青→赤）' },
+];
+
+const vertexCommon = /* glsl */`
+  attribute vec2 pix;
+  attribute vec3 col;
+  attribute float kind;
+  attribute float tDec;
+  attribute float lead;
+  uniform float uFrom, uTo, uMix, uH, uProgress, uTotal, uMaxLead, uW, uHgt, uColorMode, uFlash;
+  varying vec3 vCol;
+  varying float vHide;
+
+  vec3 hsv2rgb(vec3 c){ vec3 p = abs(fract(c.xxx + vec3(1.,2./3.,1./3.))*6.-3.); return c.z*mix(vec3(1.),clamp(p-1.,0.,1.),c.y); }
+
+  vec3 posFor(float m) {
+    float S = 10.0 / max(uW, uHgt);
+    vec3 base = vec3((pix.x + 0.5 - uW*0.5)*S, -(pix.y + 0.5 - uHgt*0.5)*S, 0.0);
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    if (m < 0.5) return base;
+    if (m < 1.5) return base + vec3(0., 0., lum * uH);
+    if (m < 2.5) return base + vec3(0., 0., kind > 1.5 ? uH*0.5 : (kind > 0.5 ? uH : 0.0));
+    if (m < 3.5) return base + vec3(0., 0., sqrt(lead / max(uMaxLead, 1.0)) * uH * 1.5);
+    return (col - 0.5) * 9.0 + vec3(0., 0., 4.5);
+  }
+
+  vec3 computePos() {
+    vec3 p = mix(posFor(uFrom), posFor(uTo), uMix);
+    float age = uProgress - tDec;
+    vHide = age < 0.0 ? 1.0 : 0.0;
+    // 稲妻フラッシュ: 確定直後のドットを白く光らせる
+    float flash = uFlash > 0.0 ? clamp(1.0 - age / uFlash, 0.0, 1.0) : 0.0;
+    if (uColorMode < 0.5) vCol = col;
+    else if (uColorMode < 1.5) vCol = kind > 1.5 ? vec3(0.29,0.84,1.0) : (kind > 0.5 ? vec3(1.0,0.54,0.24) : col*0.18+0.06);
+    else vCol = hsv2rgb(vec3(0.66 * (1.0 - tDec / max(uTotal,1.0)), 0.85, 0.95));
+    vCol = mix(vCol, vec3(1.0, 1.0, 0.85), flash * flash);
+    p.z += flash * 0.25;
+    return p;
+  }
+`;
+
+const pointsMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uFrom: { value: 0 }, uTo: { value: 0 }, uMix: { value: 1 }, uH: { value: 2 },
+    uProgress: { value: 1e12 }, uTotal: { value: 1 }, uMaxLead: { value: 1 },
+    uW: { value: 512 }, uHgt: { value: 512 }, uColorMode: { value: 0 }, uFlash: { value: 0 },
+    uSize: { value: 1.1 }, uScale: { value: 1 },
+  },
+  vertexShader: vertexCommon + /* glsl */`
+    uniform float uSize, uScale;
+    void main() {
+      vec3 p = computePos();
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mv;
+      float S = 10.0 / max(uW, uHgt);
+      gl_PointSize = vHide > 0.5 ? 0.0 : max(1.0, uSize * S * uScale / -mv.z);
+    }`,
+  fragmentShader: /* glsl */`
+    varying vec3 vCol; varying float vHide;
+    void main() { if (vHide > 0.5) discard; gl_FragColor = vec4(vCol, 1.0); }`,
+});
+
+const linesMat = new THREE.ShaderMaterial({
+  uniforms: pointsMat.uniforms,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: vertexCommon + /* glsl */`
+    void main() {
+      vec3 p = computePos();
+      p.z += 0.01;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    }`,
+  fragmentShader: /* glsl */`
+    varying vec3 vCol; varying float vHide;
+    void main() { if (vHide > 0.5) discard; gl_FragColor = vec4(mix(vCol, vec3(0.45,0.85,1.0), 0.6), 0.55); }`,
+});
+
+let points = null, lines = null, pic = null;
+const U = pointsMat.uniforms;
+
+function buildScene(d) {
+  if (points) { scene.remove(points); points.geometry.dispose(); }
+  if (lines) { scene.remove(lines); lines.geometry.dispose(); }
+  const { W, H, gv, kind, tDec, lead, segs } = d;
+  const N = W * H;
+  const pixA = new Float32Array(N * 2), colA = new Float32Array(N * 3);
+  let maxLead = 1;
+  for (let y = 0, i = 0; y < H; y++) for (let x = 0; x < W; x++, i++) {
+    pixA[i*2] = x; pixA[i*2+1] = y;
+    const [r, g, b] = c16ToRGB(gv[i]);
+    colA[i*3] = r; colA[i*3+1] = g; colA[i*3+2] = b;
+    if (lead[i] > maxLead) maxLead = lead[i];
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+  g.setAttribute('pix', new THREE.BufferAttribute(pixA, 2));
+  g.setAttribute('col', new THREE.BufferAttribute(colA, 3));
+  g.setAttribute('kind', new THREE.BufferAttribute(new Float32Array(kind), 1));
+  g.setAttribute('tDec', new THREE.BufferAttribute(tDec, 1));
+  g.setAttribute('lead', new THREE.BufferAttribute(lead, 1));
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 100);
+  points = new THREE.Points(g, pointsMat);
+  scene.add(points);
+
+  // 連鎖ライン: 線分の両端に、その線分の到達点の属性を与える
+  const M = segs.length / 6;
+  const lp = new Float32Array(M * 4), lc = new Float32Array(M * 6), lk = new Float32Array(M * 2),
+        lt = new Float32Array(M * 2), ll = new Float32Array(M * 2);
+  for (let s = 0; s < M; s++) {
+    const o = s * 6;
+    const x0 = segs[o], y0 = segs[o+1], x1 = segs[o+2], y1 = segs[o+3], t1 = segs[o+4];
+    const [r, gg, b] = c16ToRGB(segs[o+5]);
+    const i0 = y0 * W + x0, i1 = y1 * W + x1;
+    lp.set([x0, y0, x1, y1], s * 4);
+    lc.set([r, gg, b, r, gg, b], s * 6);
+    lk[s*2] = kind[i0]; lk[s*2+1] = 2;
+    lt[s*2] = t1; lt[s*2+1] = t1;
+    ll[s*2] = lead[i0]; ll[s*2+1] = lead[i1];
+  }
+  const lg = new THREE.BufferGeometry();
+  lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(M * 6), 3));
+  lg.setAttribute('pix', new THREE.BufferAttribute(lp, 2));
+  lg.setAttribute('col', new THREE.BufferAttribute(lc, 3));
+  lg.setAttribute('kind', new THREE.BufferAttribute(lk, 1));
+  lg.setAttribute('tDec', new THREE.BufferAttribute(lt, 1));
+  lg.setAttribute('lead', new THREE.BufferAttribute(ll, 1));
+  lg.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 100);
+  lines = new THREE.LineSegments(lg, linesMat);
+  lines.visible = state.chains;
+  scene.add(lines);
+
+  U.uW.value = W; U.uHgt.value = H; U.uTotal.value = d.total; U.uMaxLead.value = maxLead;
+}
+
+// ---------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const state = { mix: 1, mode: 3, colorMode: 0, playing: false, progress: 1, chains: true, rotate: false };
+
+function setMode(m, instant) {
+  U.uFrom.value = instant ? m : (state.mix < 0.5 ? U.uFrom.value : U.uTo.value);
+  U.uTo.value = m; state.mix = instant ? 1 : 0; U.uMix.value = state.mix;
+  state.mode = m;
+  [...$('modes').children].forEach((b, i) => b.classList.toggle('on', i === m));
+  $('desc').textContent = MODES[m].desc;
+}
+MODES.forEach((m, i) => {
+  const b = document.createElement('button'); b.textContent = m.name;
+  b.onclick = () => { if (state.mode !== i) setMode(i); };
+  $('modes').appendChild(b);
+});
+function setColorMode(m) {
+  state.colorMode = m; U.uColorMode.value = m;
+  [...$('colorModes').children].forEach((b, i) => b.classList.toggle('on', i === m));
+  $('legend').innerHTML = COLOR_MODES[m].legend || '';
+}
+COLOR_MODES.forEach((m, i) => {
+  const b = document.createElement('button'); b.textContent = m.name;
+  b.onclick = () => setColorMode(i);
+  $('colorModes').appendChild(b);
+});
+
+function bindRange(id, fmt, fn) {
+  const el = $(id), out = $(id + 'V');
+  const upd = () => { const v = +el.value; if (out) out.textContent = fmt(v); fn(v); };
+  el.addEventListener('input', upd); upd();
+  return el;
+}
+bindRange('height', (v) => (v / 10).toFixed(1), (v) => U.uH.value = v / 10);
+bindRange('psize', (v) => (v / 10).toFixed(1), (v) => U.uSize.value = v / 10);
+bindRange('speed', (v) => (60 / v).toFixed(1) + '秒', () => {});
+const progEl = $('prog');
+progEl.addEventListener('input', () => { state.playing = false; updPlay(); setProgress(+progEl.value / 1000); });
+
+function setProgress(p) {
+  state.progress = Math.max(0, Math.min(1, p));
+  const total = pic ? pic.total : 1;
+  U.uProgress.value = state.progress >= 1 ? 1e12 : state.progress * total;
+  U.uFlash.value = state.progress >= 1 ? 0 : total * 0.01;
+  progEl.value = Math.round(state.progress * 1000);
+  $('progV').textContent = pic ? Math.round(state.progress * total / 8).toLocaleString() + 'B' : '';
+}
+function updPlay() { $('play').textContent = state.playing ? '❚❚ 停止' : '▶ 再生'; }
+$('play').onclick = () => {
+  if (!state.playing && state.progress >= 1) setProgress(0);
+  state.playing = !state.playing; updPlay();
+};
+$('restart').onclick = () => { setProgress(0); state.playing = true; updPlay(); };
+$('full').onclick = () => { state.playing = false; updPlay(); setProgress(1); };
+$('chains').onclick = (e) => { state.chains = !state.chains; e.target.classList.toggle('on', state.chains); if (lines) lines.visible = state.chains; };
+$('rotate').onclick = (e) => { state.rotate = !state.rotate; e.target.classList.toggle('on', state.rotate); controls.autoRotate = state.rotate; };
+$('resetCam').onclick = resetCamera;
+$('toggle').onclick = () => { const p = $('panel'); p.style.display = p.style.display === 'none' ? '' : 'none'; };
+
+function resetCamera() {
+  camera.position.set(1, -10.5, 8.5);
+  camera.up.set(0, 0, 1);
+  controls.target.set(0, 0, 1);
+  controls.update();
+}
+
+function showInfo(d, name) {
+  const s = d.stats, N = d.W * d.H;
+  const t = $('thumb'); t.width = d.W; t.height = d.H;
+  const ctx = t.getContext('2d'), img = ctx.createImageData(d.W, d.H);
+  for (let i = 0; i < N; i++) {
+    const [r, g, b] = c16ToRGB(d.gv[i]);
+    img.data[i*4] = r * 255; img.data[i*4+1] = g * 255; img.data[i*4+2] = b * 255; img.data[i*4+3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  $('comment').textContent = d.comment ? `“${d.comment}”` : '';
+  const pct = (v) => (v / N * 100).toFixed(1) + '%';
+  $('info').innerHTML = `<table>
+    <tr><td>ファイル</td><td>${name}</td></tr>
+    <tr><td>サイズ</td><td>${d.W} × ${d.H}</td></tr>
+    <tr><td>ファイル長</td><td>${d.fileSize.toLocaleString()} B</td></tr>
+    <tr><td>圧縮率 (対 16bit)</td><td>${(d.fileSize / (N * 2) * 100).toFixed(2)}%</td></tr>
+    <tr><td>使用色数</td><td>${s.colors.toLocaleString()}</td></tr>
+    <tr><td>変化点</td><td>${s.nChange.toLocaleString()} (${pct(s.nChange)})</td></tr>
+    <tr><td>連鎖</td><td>${s.nChain.toLocaleString()} 本 / ${s.nChainPix.toLocaleString()} 点 (${pct(s.nChainPix)})</td></tr>
+    <tr><td>色キャッシュ</td><td>hit ${s.cacheHit.toLocaleString()} / miss ${s.cacheMiss.toLocaleString()}</td></tr>
+  </table>`;
+}
+
+function load(buffer, name) {
+  $('err').textContent = '';
+  try {
+    const d = decodePIC(buffer);
+    pic = d;
+    buildScene(d);
+    showInfo(d, name);
+    setProgress(0); state.playing = true; updPlay();
+  } catch (e) {
+    console.error(e);
+    $('err').textContent = `読み込み失敗: ${e.message}`;
+  }
+}
+function loadSample() {
+  const bin = atob(SAMPLE_B64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  load(u8.buffer, 'SAMPLE1.PIC');
+}
+$('loadSample').onclick = loadSample;
+
+// ---- 画像 → PIC 変換
+const enc = { img: null, name: '', bytes: null };
+async function setSourceImage(file) {
+  $('err').textContent = '';
+  try {
+    enc.img = await createImageBitmap(file);
+    enc.name = file.name.replace(/\.[^.]+$/, '') || 'image';
+    $('reconvert').disabled = false;
+    convert();
+  } catch (e) {
+    console.error(e);
+    $('err').textContent = `画像を読み込めません: ${file.name}`;
+  }
+}
+function convert() {
+  if (!enc.img) return;
+  const t0 = performance.now();
+  const lim = +$('optSize').value || 1024;
+  const sc = Math.min(1, lim / Math.max(enc.img.width, enc.img.height));
+  const W = Math.max(1, Math.round(enc.img.width * sc)), H = Math.max(1, Math.round(enc.img.height * sc));
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(enc.img, 0, 0, W, H);
+  const gv = quantize(ctx.getImageData(0, 0, W, H).data, W, H, +$('optBits').value, $('optDither').value);
+  const { bytes, prof } = encodePIC(gv, W, H, $('optComment').value);
+  const ms = performance.now() - t0;
+  // 自前デコーダで読み戻して検証し、そのまま 3D 表示
+  enc.bytes = bytes;
+  const fname = enc.name.slice(0, 8).toUpperCase() + '.PIC';
+  load(bytes.slice().buffer, fname);
+  const ok = pic && pic.gv.every((v, i) => v === gv[i]);
+  $('download').disabled = !ok;
+  const kb = (n) => (n / 8 / 1024).toFixed(1) + 'KB';
+  $('encInfo').innerHTML = ok
+    ? `✓ ${W}×${H} → ${bytes.length.toLocaleString()} B（無圧縮16bitの ${(bytes.length / (W * H * 2) * 100).toFixed(1)}%）${ms.toFixed(0)}ms<br>
+       内訳: 色 ${kb(prof.color)} / 長さ ${kb(prof.length)} / 連鎖 ${kb(prof.chain)}`
+    : '✗ 読み戻し検証に失敗しました';
+}
+['optSize', 'optBits', 'optDither'].forEach((id) => $(id).addEventListener('change', convert));
+$('optComment').addEventListener('change', convert);
+$('reconvert').onclick = convert;
+$('download').onclick = () => {
+  if (!enc.bytes) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([enc.bytes], { type: 'application/octet-stream' }));
+  a.download = enc.name + '.PIC';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$('imgFile').onchange = (e) => { const f = e.target.files[0]; if (f) setSourceImage(f); e.target.value = ''; };
+
+// PIC ならビューアへ、それ以外の画像なら変換へ
+async function openFile(f) {
+  const buf = await f.arrayBuffer();
+  const h = new Uint8Array(buf, 0, Math.min(3, buf.byteLength));
+  if (h[0] === 0x50 && h[1] === 0x49 && h[2] === 0x43) load(buf, f.name);
+  else setSourceImage(f);
+}
+$('file').onchange = (e) => { const f = e.target.files[0]; if (f) openFile(f); e.target.value = ''; };
+addEventListener('dragover', (e) => { e.preventDefault(); $('drop').classList.add('show'); });
+addEventListener('dragleave', (e) => { if (!e.relatedTarget) $('drop').classList.remove('show'); });
+addEventListener('drop', (e) => {
+  e.preventDefault(); $('drop').classList.remove('show');
+  const f = e.dataTransfer.files[0]; if (f) openFile(f);
+});
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  U.uScale.value = renderer.getDrawingBufferSize(new THREE.Vector2()).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+}
+addEventListener('resize', resize);
+
+const clock = new THREE.Clock();
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if (state.mix < 1) {
+    state.mix = Math.min(1, state.mix + dt / 1.2);
+    U.uMix.value = state.mix * state.mix * (3 - 2 * state.mix);
+  }
+  if (state.playing && pic) {
+    const p = state.progress + dt / (60 / +$('speed').value);
+    if (p >= 1) { state.playing = false; updPlay(); setProgress(1); } else setProgress(p);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+
+setMode(state.mode, true);
+setColorMode(0);
+resize(); resetCamera();
+loadSample();
+tick();
+</script>
+</body>
+</html>
